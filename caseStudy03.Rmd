@@ -1,0 +1,302 @@
+---
+title: "caseStudy03"
+author: "JeanPhilipJuachon"
+date: "10/21/2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(car)
+library(tidyverse)
+library(ggfortify)
+library(ggplot2)
+library(ISLR)
+library(leaps)
+library(caret)
+library(skimr)
+library(corrplot)
+library(glmnet)
+knitr::opts_chunk$set(echo = TRUE, tidy = FALSE, 
+                      fig.align = 'center', fig.width = 5, fig.height = 5)
+```
+
+```{r}
+data <- read.csv("training_data.csv")
+testdata <- read.csv("test_data.csv")
+```
+
+```{r}
+data <- select(data, -c(encounter_id, patient_nbr, weight,glimepiride.pioglitazone)) #removing the weight column because it is full of null, the other columns are just IDs, we dont really need IDs for predictions
+
+data <- filter(data, discharge_disposition_id !=c(11,13,14,19,20,21)) #filtering to only those disposition id is not                                                  related to death or hospice.
+
+testdata <- select(testdata, -c(encounter_id, patient_nbr, weight,glimepiride.pioglitazone)) #removing the weight column because it is full of null, the other columns are just IDs, we dont really need IDs for predictions
+
+testdata <- filter(testdata, discharge_disposition_id !=c(11,13,14,19,20,21))
+```
+
+```{r EXPLORATION}
+group_by(data, readmitted) %>% 
+  summarize(n())
+data$readmitted <- as.factor(ifelse(data$readmitted == "<30", 1, 0)) #change to 1 if readmitted within 30 days, 0                                                 othwerwise, also, creating it as a factor with 2 levels
+data$readmitted <- factor(data$readmitted)
+testdata$readmitted <- as.factor(ifelse(testdata$readmitted == "<30", 1, 0)) #change to 1 if readmitted within 30 days, 0                                                 othwerwise, also, creating it as a factor with 2 levels
+testdata$readmitted <- factor(testdata$readmitted)
+
+
+group_by(data, gender) %>% 
+  summarize(n())
+data$gender[data$gender == "Unknown/Invalid"] <- "Female" #changing the unknown/invalid to female
+data$gender <- factor(data$gender)
+testdata$gender[testdata$gender == "Unknown/Invalid"] <- "Female" #changing the unknown/invalid to female
+testdata$gender <- factor(testdata$gender)
+
+#Exploration of race column
+group_by(data, race) %>% 
+  summarize(n())
+factor(data$race[data$race == "?"] <- "Other") #setting invalid race to other since race column has "other" as a level, the null values were changed to other
+data$race <- factor(data$race)
+factor(testdata$race[testdata$race == "?"] <- "Other") #setting invalid race to other since race column has "other" as a level, the null values were changed to other
+testdata$race <- factor(testdata$race)
+
+
+#Exploration of medical_specialty column
+group_by(data, medical_specialty) %>% 
+  summarize(n())
+#27479 / 57011
+#since the medical_specialty column consists of 48% missing values, we decided to drop it
+data <- select(data, -medical_specialty)
+testdata <- select(testdata, -medical_specialty)
+
+#exploration of payer_code column
+group_by(data, payer_code) %>% 
+  summarize(n())
+#24658 /57011
+#since payer_code column consists of 43% missing values, we decided to drop it as well.
+data <- select(data, -payer_code)
+testdata <- select(testdata, -payer_code)
+
+
+#exploration of citoglipton and examide columns
+group_by(data, citoglipton, examide) %>% 
+  summarize(n())
+#since citoglipton and examide columns only contain No as values, this is a missing information problem, we decided to drop these columns since it wont add any information
+data <- select(data, -c(citoglipton, examide))
+testdata <- select(testdata, -c(citoglipton, examide))
+
+#removing all the ? values
+data <- data[data$diag_1 != "?",]
+data <- data[data$diag_2 != "?",]
+data <- data[data$diag_3 != "?",]
+data$diag_1 <- factor(data$diag_1)
+data$diag_2 <- factor(data$diag_2)
+data$diag_3 <- factor(data$diag_3)
+
+testdata <- testdata[testdata$diag_1 != "?",]
+testdata <- testdata[testdata$diag_2 != "?",]
+testdata <- testdata[testdata$diag_3 != "?",]
+testdata$diag_1 <- factor(testdata$diag_1)
+testdata$diag_2 <- factor(testdata$diag_2)
+testdata$diag_3 <- factor(testdata$diag_3)
+```
+```{r grouping the diag variables to reduce the number of factors}
+data2 <- data
+# diagnosis1
+data2$diagnosis_group <- factor( rep("other",nrow(data2)),ordered = F, 
+                                 levels = c("circulatory","respiratory","Digestive","Diabetes","Injury",
+                                            "Musculoskeletal","Genitourinary","Neoplasms","other"))
+data2$diagnosis_group[data2$diag_1>=390 & data2$diag_1 <= 459 | data2$diag_1==785] <- "circulatory"
+data2$diagnosis_group[data2$diag_1>=460 & data2$diag_1 <= 519 | data2$diag_1==786] <- "respiratory"
+data2$diagnosis_group[data2$diag_1>=520 & data2$diag_1 <= 579 | data2$diag_1==787] <- "Digestive"
+data2$diagnosis_group[data2$diag_1>=250 & data2$diag_1 < 251] <- "Diabetes"
+data2$diagnosis_group[data2$diag_1>800 & data2$diag_1 <= 999] <- "Injury"
+data2$diagnosis_group[data2$diag_1>=710 & data2$diag_1 <= 739] <- "Musculoskeletal"
+data2$diagnosis_group[data2$diag_1>=580 & data2$diag_1 <= 629 | data2$diag_1==788] <- "Genitourinary"
+data2$diagnosis_group[data2$diag_1>=140 & data2$diag_1 <= 239 | data2$diag_1>=790 & 
+                        data2$diag_1 <= 799 | data2$diag_1==780 | data2$diag_1>=240 & data2$diag_1 < 250 |
+                        data2$diag_1>=251 & data2$diag_1 <= 279 | data2$diag_1>=680 & data2$diag_1 <= 709 |
+                        data2$diag_1>=001 & data2$diag_1 <= 139 | data2$diag_1==781 |
+                      data2$diag_1==782 | data2$diag_1==784] <- "Neoplasms"
+# diagnosis_2
+data2$diagnosis_2 <- factor( rep("other",nrow(data2)),ordered = F, 
+                                 levels = c("circulatory","respiratory","Digestive","Diabetes","Injury",
+                                            "Musculoskeletal","Genitourinary","Neoplasms","other"))
+data2$diagnosis_2[data2$diag_2>=390 & data2$diag_2 <= 459 | data2$diag_2==785] <- "circulatory"
+data2$diagnosis_2[data2$diag_2>=460 & data2$diag_2 <= 519 | data2$diag_2==786] <- "respiratory"
+data2$diagnosis_2[data2$diag_2>=520 & data2$diag_2 <= 579 | data2$diag_2==787] <- "Digestive"
+data2$diagnosis_2[data2$diag_2>=250 & data2$diag_2 < 251] <- "Diabetes"
+data2$diagnosis_2[data2$diag_2>800 & data2$diag_2 <= 999] <- "Injury"
+data2$diagnosis_2[data2$diag_2>=710 & data2$diag_2 <= 739] <- "Musculoskeletal"
+data2$diagnosis_2[data2$diag_2>=580 & data2$diag_2 <= 629 | data2$diag_2==788] <- "Genitourinary"
+data2$diagnosis_2[data2$diag_2>=140 & data2$diag_2 <= 239 | data2$diag_2>=790 & 
+                        data2$diag_2 <= 799 | data2$diag_2==780 | data2$diag_2>=240 & data2$diag_2 < 250 |
+                        data2$diag_2>=251 & data2$diag_2 <= 279 | data2$diag_2>=680 & data2$diag_2 <= 709 |
+                        data2$diag_2>=001 & data2$diag_2 <= 139 | data2$diag_2==781 |
+                        data2$diag_2==782 | data2$diag_2==784] <- "Neoplasms"
+# diagnosis_3
+data2$diagnosis_3 <- factor( rep("other",nrow(data2)),ordered = F, 
+                                 levels = c("circulatory","respiratory","Digestive","Diabetes","Injury",
+                                            "Musculoskeletal","Genitourinary","Neoplasms","other"))
+data2$diagnosis_3[data2$diag_3>=390 & data2$diag_3 <= 459 | data2$diag_3==785] <- "circulatory"
+data2$diagnosis_3[data2$diag_3>=460 & data2$diag_3 <= 519 | data2$diag_3==786] <- "respiratory"
+data2$diagnosis_3[data2$diag_3>=520 & data2$diag_3 <= 579 | data2$diag_3==787] <- "Digestive"
+data2$diagnosis_3[data2$diag_3>=250 & data2$diag_3 < 251] <- "Diabetes"
+data2$diagnosis_3[data2$diag_3>800 & data2$diag_3 <= 999] <- "Injury"
+data2$diagnosis_3[data2$diag_3>=710 & data2$diag_3 <= 739] <- "Musculoskeletal"
+data2$diagnosis_3[data2$diag_3>=580 & data2$diag_3 <= 629 | data2$diag_3==788] <- "Genitourinary"
+data2$diagnosis_3[data2$diag_3>=140 & data2$diag_3 <= 239 | data2$diag_3>=790 & 
+                        data2$diag_3 <= 799 | data2$diag_3==780 | data2$diag_3>=240 & data2$diag_3 < 250 |
+                        data2$diag_3>=251 & data2$diag_3 <= 279 | data2$diag_3>=680 & data2$diag_3 <= 709 |
+                        data2$diag_3>=001 & data2$diag_3 <= 139 | data2$diag_3==781 |
+                        data2$diag_3==782 | data2$diag_3==784] <- "Neoplasms"
+
+data2$admission_source <- factor( rep("other",nrow(data2)),ordered = F, 
+                             levels = c("clinic_referral", "emergency","other"))
+data2$admission_source[data2$admission_source_id==c(1,2,3)]<- "clinic_referral"
+data2$admission_source[data2$admission_source_id==7]<- "emergency"
+# discharged_to
+data2$discharged_to <- factor( rep("transferred",nrow(data2)),ordered = F, 
+                                  levels = c("home", "transferred","left_AMA"))
+data2$discharged_to[data2$discharge_disposition_id==c(1,6,8)]<- "home"
+data2$discharged_to[data2$discharge_disposition_id==7]<- "left_AMA"
+data2 <- select(data2, -diag_1, -diag_2, -diag_3, -admission_type_id, -discharge_disposition_id)
+#data2 <- select(data2, -medical_specialty)
+data2 <- rename(data2, diag1 = diagnosis_group, diag2=diagnosis_2, diag3 = diagnosis_3)
+# payer_code
+data2$payer_code2 <- factor( rep("other",nrow(data2)),ordered = F, 
+                               levels = c("other", "self_pay"))
+data2$payer_code2[data2$payer_code=="SP"]<- "self_pay"
+#data2 <- select(data2, -payer_code)
+data2 <- select(data2, -admission_source_id)
+data2 <- rename(data2, payer_code=payer_code2)
+View(data2)
+str(data2)
+names(data2)
+
+model_logistic <- glm(readmitted ~ race+age+admission_type_id+discharge_disposition_id+admission_source_id+time_in_hospital+change+num_lab_procedures+num_procedures+num_medications+number_outpatient+number_emergency+number_inpatient+diabetesMed+diag_1+diag_2+diag_3+number_diagnoses+max_glu_serum+A1Cresult+insulin, data = data, family = binomial(link="logit"))
+
+prediction_logistic <- predict(model_logistic,testdata, type = "response")
+prediction_logistic2 <- ifelse(prediction_logistic > 0.5,1,0)
+resultTable <- as.data.frame()
+```
+```{r testdata grouping of ICD codes}
+testdata2 <- testdata
+# diagnosis1
+testdata2$diagnosis_group <- factor( rep("other",nrow(testdata2)),ordered = F, 
+                                 levels = c("circulatory","respiratory","Digestive","Diabetes","Injury",
+                                            "Musculoskeletal","Genitourinary","Neoplasms","other"))
+testdata2$diagnosis_group[testdata2$diag_1>=390 & testdata2$diag_1 <= 459 | testdata2$diag_1==785] <- "circulatory"
+testdata2$diagnosis_group[testdata2$diag_1>=460 & testdata2$diag_1 <= 519 | testdata2$diag_1==786] <- "respiratory"
+testdata2$diagnosis_group[testdata2$diag_1>=520 & testdata2$diag_1 <= 579 | testdata2$diag_1==787] <- "Digestive"
+testdata2$diagnosis_group[testdata2$diag_1>=250 & testdata2$diag_1 < 251] <- "Diabetes"
+testdata2$diagnosis_group[testdata2$diag_1>800 & testdata2$diag_1 <= 999] <- "Injury"
+testdata2$diagnosis_group[testdata2$diag_1>=710 & testdata2$diag_1 <= 739] <- "Musculoskeletal"
+testdata2$diagnosis_group[testdata2$diag_1>=580 & testdata2$diag_1 <= 629 | testdata2$diag_1==788] <- "Genitourinary"
+testdata2$diagnosis_group[testdata2$diag_1>=140 & testdata2$diag_1 <= 239 | testdata2$diag_1>=790 & 
+                        testdata2$diag_1 <= 799 | testdata2$diag_1==780 | testdata2$diag_1>=240 & testdata2$diag_1 < 250 |
+                        testdata2$diag_1>=251 & testdata2$diag_1 <= 279 | testdata2$diag_1>=680 & testdata2$diag_1 <= 709 |
+                        testdata2$diag_1>=001 & testdata2$diag_1 <= 139 | testdata2$diag_1==781 |
+                      testdata2$diag_1==782 | testdata2$diag_1==784] <- "Neoplasms"
+# diagnosis_2
+testdata2$diagnosis_2 <- factor( rep("other",nrow(testdata2)),ordered = F, 
+                                 levels = c("circulatory","respiratory","Digestive","Diabetes","Injury",
+                                            "Musculoskeletal","Genitourinary","Neoplasms","other"))
+testdata2$diagnosis_2[testdata2$diag_2>=390 & testdata2$diag_2 <= 459 | testdata2$diag_2==785] <- "circulatory"
+testdata2$diagnosis_2[testdata2$diag_2>=460 & testdata2$diag_2 <= 519 | testdata2$diag_2==786] <- "respiratory"
+testdata2$diagnosis_2[testdata2$diag_2>=520 & testdata2$diag_2 <= 579 | testdata2$diag_2==787] <- "Digestive"
+testdata2$diagnosis_2[testdata2$diag_2>=250 & testdata2$diag_2 < 251] <- "Diabetes"
+testdata2$diagnosis_2[testdata2$diag_2>800 & testdata2$diag_2 <= 999] <- "Injury"
+testdata2$diagnosis_2[testdata2$diag_2>=710 & testdata2$diag_2 <= 739] <- "Musculoskeletal"
+testdata2$diagnosis_2[testdata2$diag_2>=580 & testdata2$diag_2 <= 629 | testdata2$diag_2==788] <- "Genitourinary"
+testdata2$diagnosis_2[testdata2$diag_2>=140 & testdata2$diag_2 <= 239 | testdata2$diag_2>=790 & 
+                        testdata2$diag_2 <= 799 | testdata2$diag_2==780 | testdata2$diag_2>=240 & testdata2$diag_2 < 250 |
+                        testdata2$diag_2>=251 & testdata2$diag_2 <= 279 | testdata2$diag_2>=680 & testdata2$diag_2 <= 709 |
+                        testdata2$diag_2>=001 & testdata2$diag_2 <= 139 | testdata2$diag_2==781 |
+                        testdata2$diag_2==782 | testdata2$diag_2==784] <- "Neoplasms"
+# diagnosis_3
+testdata2$diagnosis_3 <- factor( rep("other",nrow(testdata2)),ordered = F, 
+                                 levels = c("circulatory","respiratory","Digestive","Diabetes","Injury",
+                                            "Musculoskeletal","Genitourinary","Neoplasms","other"))
+testdata2$diagnosis_3[testdata2$diag_3>=390 & testdata2$diag_3 <= 459 | testdata2$diag_3==785] <- "circulatory"
+testdata2$diagnosis_3[testdata2$diag_3>=460 & testdata2$diag_3 <= 519 | testdata2$diag_3==786] <- "respiratory"
+testdata2$diagnosis_3[testdata2$diag_3>=520 & testdata2$diag_3 <= 579 | testdata2$diag_3==787] <- "Digestive"
+testdata2$diagnosis_3[testdata2$diag_3>=250 & testdata2$diag_3 < 251] <- "Diabetes"
+testdata2$diagnosis_3[testdata2$diag_3>800 & testdata2$diag_3 <= 999] <- "Injury"
+testdata2$diagnosis_3[testdata2$diag_3>=710 & testdata2$diag_3 <= 739] <- "Musculoskeletal"
+testdata2$diagnosis_3[testdata2$diag_3>=580 & testdata2$diag_3 <= 629 | testdata2$diag_3==788] <- "Genitourinary"
+testdata2$diagnosis_3[testdata2$diag_3>=140 & testdata2$diag_3 <= 239 | testdata2$diag_3>=790 & 
+                        testdata2$diag_3 <= 799 | testdata2$diag_3==780 | testdata2$diag_3>=240 & testdata2$diag_3 < 250 |
+                        testdata2$diag_3>=251 & testdata2$diag_3 <= 279 | testdata2$diag_3>=680 & testdata2$diag_3 <= 709 |
+                        testdata2$diag_3>=001 & testdata2$diag_3 <= 139 | testdata2$diag_3==781 |
+                        testdata2$diag_3==782 | testdata2$diag_3==784] <- "Neoplasms"
+
+testdata2$admission_source <- factor( rep("other",nrow(testdata2)),ordered = F, 
+                             levels = c("clinic_referral", "emergency","other"))
+testdata2$admission_source[testdata2$admission_source_id==c(1,2,3)]<- "clinic_referral"
+testdata2$admission_source[testdata2$admission_source_id==7]<- "emergency"
+# discharged_to
+testdata2$discharged_to <- factor( rep("transferred",nrow(testdata2)),ordered = F, 
+                                  levels = c("home", "transferred","left_AMA"))
+testdata2$discharged_to[testdata2$discharge_disposition_id==c(1,6,8)]<- "home"
+testdata2$discharged_to[testdata2$discharge_disposition_id==7]<- "left_AMA"
+testdata2 <- select(testdata2, -diag_1, -diag_2, -diag_3, -admission_type_id, -discharge_disposition_id)
+#testdata2 <- select(testdata2, -medical_specialty)
+testdata2 <- rename(testdata2, diag1 = diagnosis_group, diag2=diagnosis_2, diag3 = diagnosis_3)
+# payer_code
+testdata2$payer_code2 <- factor( rep("other",nrow(testdata2)),ordered = F, 
+                               levels = c("other", "self_pay"))
+testdata2$payer_code2[testdata2$payer_code=="SP"]<- "self_pay"
+#testdata2 <- select(testdata2, -payer_code)
+testdata2 <- select(testdata2, -admission_source_id)
+testdata2 <- rename(testdata2, payer_code=payer_code2)
+
+```
+
+
+
+
+
+
+
+```{r fig.width=10, fig.height=10}
+par(mfrow = c(25,25))
+loop <- 1:ncol(data)
+for(i in loop){
+  x <- data[,i]
+  plot(x)
+}
+
+str(data)
+data$admission_type_id <- as.factor(data$admission_type_id)
+data$discharge_disposition_id <- as.factor(data$discharge_disposition_id)
+data$admission_source_id <- as.factor(data$admission_source_id)
+
+#dropping the feature with only 1 factor
+#data <- filter(data, -glimepiride.pioglitazone)
+```
+
+```{r}
+#Since the data is now clean, we can try now to model a logistic regression model
+#model <- glm(readmitted ~. ,data = data, family = binomial(link = "logit"))
+set.seed(2019)
+x <- model.matrix(readmitted~. , data)[,-1]
+y <- data$readmitted
+as.matrix(y)
+
+cv.lasso <- cv.glmnet(x, y, family = "binomial")
+model <- glmnet(x,y, alpha = 1, family = "binomial", lambda = cv.lasso$lambda.min)
+plot(cv.lasso)
+coef(cv.lasso, cv.lasso$lambda.min)
+```
+```{r}
+numeric_data<-select_if(data,is.numeric)
+c <- cor(numeric_data, use= "pairwise.complete.obs")
+corrplot(c)
+```
+
+
+
+
+
+

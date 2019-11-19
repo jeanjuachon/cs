@@ -1,0 +1,335 @@
+---
+title: "caseStudy3finalScript"
+author: "JeanPhilipJuachon"
+date: "10/24/2019"
+output: html_document
+---
+
+```{r load philip defaults, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(car)
+library(tidyverse)
+library(ggfortify)
+library(ggplot2)
+library(ISLR)
+library(leaps)
+library(caret)
+library(skimr)
+library(corrplot)
+library(glmnet)
+library(ResourceSelection)
+library(plotROC)
+library(pROC)
+library(ROSE)
+knitr::opts_chunk$set(echo = TRUE, tidy = FALSE, 
+                      fig.align = 'center', fig.width = 5, fig.height = 5)
+```
+
+###loading the data
+```{r}
+data <- read.csv("training_data.csv", stringsAsFactors = TRUE)
+testdata <- read.csv("test_data.csv")
+```
+
+###removal of columns that did not meet the conditions
+```{r}
+data <- select(data, -c(encounter_id, weight, glimepiride.pioglitazone, citoglipton, examide,medical_specialty, acetohexamide))
+```
+
+###cleansing and transformation (removal of "?", transformation of readmitted to binary)
+```{r}
+data$readmitted <- as.integer(ifelse(data$readmitted == "<30", 1, 0))
+data$readmitted <- as.factor(data$readmitted)
+
+as.factor(data$gender[data$gender == "Unknown/Invalid"] <- "Female")
+data$gender <- factor(data$gender)
+
+as.factor(data$race[data$race == "?"] <- "Other") 
+data$race <- factor(data$race)
+
+data$payer_code[data$payer_code == "?" | data$payer_code == "FR"| data$payer_code == "MP" | data$payer_code == "SI"] <- "OT"
+data$payer_code <- factor(data$payer_code)
+
+data <- data[data$diag_1 != "?",]
+data <- data[data$diag_2 != "?",]
+data <- data[data$diag_3 != "?",]
+data$diag_1 <- factor(data$diag_1)
+data$diag_2 <- factor(data$diag_2)
+data$diag_3 <- factor(data$diag_3)
+
+#factor the nominal values
+data$admission_type_id <- as.factor(data$admission_type_id)
+data$admission_source_id <- as.factor(data$admission_source_id)
+data$discharge_disposition_id <- as.factor(data$discharge_disposition_id)
+```
+
+##Creation of Service Utilization
+```{r}
+data$service_utilization <- data$number_outpatient + data$number_emergency + data$number_inpatient
+data <- select(data, -c(number_outpatient, number_emergency, number_inpatient))
+```
+
+#getting the count of diabetes medication
+```{r}
+data$metformin <- ifelse(data$metformin == "No",0,1)
+data$repaglinide <- ifelse(data$repaglinide == "No",0,1)
+data$nateglinide <- ifelse(data$nateglinide == "No",0,1)
+data$chlorpropamide <- ifelse(data$chlorpropamide == "No",0,1)
+data$glimepiride <- ifelse(data$glimepiride == "No",0,1)
+data$glipizide <- ifelse(data$glipizide == "No",0,1)
+data$glyburide <- ifelse(data$glyburide == "No",0,1)
+data$tolbutamide <- ifelse(data$tolbutamide == "No",0,1)
+data$pioglitazone <- ifelse(data$pioglitazone == "No",0,1)
+data$rosiglitazone <- ifelse(data$rosiglitazone == "No",0,1)
+data$acarbose <- ifelse(data$acarbose == "No",0,1)
+data$miglitol <- ifelse(data$miglitol == "No",0,1)
+data$troglitazone <- ifelse(data$troglitazone == "No",0,1)
+data$tolazamide <- ifelse(data$tolazamide == "No",0,1)
+data$glyburide.metformin <- ifelse(data$glyburide.metformin == "No",0,1)
+data$metformin.rosiglitazone <- ifelse(data$metformin.rosiglitazone == "No",0,1)
+data$metformin.pioglitazone <- ifelse(data$metformin.pioglitazone == "No",0,1)
+data$glipizide.metformin <- ifelse(data$glipizide.metformin == "No",0,1)
+
+data$count_of_diabetic_meds <- data$glipizide.metformin + data$metformin.pioglitazone + data$metformin.rosiglitazone+
+  data$glyburide.metformin + data$tolazamide + data$troglitazone + data$miglitol + data$acarbose + data$rosiglitazone+
+  data$pioglitazone + data$tolbutamide+ data$glyburide+data$glipizide+ data$glimepiride +
+  data$chlorpropamide + data$nateglinide + data$repaglinide + data$metformin
+
+data<-select(data, -c(19:32))
+data <- select(data, -c(glyburide.metformin, metformin.pioglitazone, metformin.rosiglitazone
+                        ,glipizide.metformin))
+#data <- select(data, -c(troglitazone,tolazamide))
+```
+
+#Transformation/grouping of the diag levels to circulatory, respiratory, digestive, etc.
+```{r}
+data2 <- data
+#diagnosis1
+data2$diagnosis_group <- factor( rep("other",nrow(data2)),ordered = F, 
+                                 levels = c("circulatory","respiratory","Digestive","Diabetes","Injury",
+                                            "Musculoskeletal","Genitourinary","Neoplasms","other"))
+data2$diagnosis_group[data2$diag_1 %in% as.character(390:459) | data2$diag_1=='785'] <- "circulatory"
+data2$diagnosis_group[data2$diag_1 %in% as.character(460:519) | data2$diag_1=='786'] <- "respiratory"
+data2$diagnosis_group[data2$diag_1 %in% as.character(520:579) | data2$diag_1=='787'] <- "Digestive"
+data2$diagnosis_group[substr(data2$diag_1,1,3) %in% as.character(250)] <- "Diabetes"
+data2$diagnosis_group[data2$diag_1 %in% as.character(800:999)] <- "Injury"
+data2$diagnosis_group[data2$diag_1 %in% as.character(710:739)] <- "Musculoskeletal"
+data2$diagnosis_group[data2$diag_1 %in% as.character(580:629) | data2$diag_1=='788'] <- "Genitourinary"
+data2$diagnosis_group[data2$diag_1 %in% as.character(140:239) | data2$diag_1 %in% as.character(790:799) | data2$diag_1=='780' | data2$diag_1 %in% as.character(240:249) |
+                        data2$diag_1 %in% as.character(251:279) | data2$diag_1 %in%as.character(680:709) |
+                        data2$diag_1 %in% as.character(001:139) | data2$diag_1=='781' |
+                      data2$diag_1=='782' | data2$diag_1=='784'] <- "Neoplasms"
+#diagnosis2
+data2$diagnosis_2 <- factor( rep("other",nrow(data2)),ordered = F, 
+                                 levels = c("circulatory","respiratory","Digestive","Diabetes","Injury",
+                                            "Musculoskeletal","Genitourinary","Neoplasms","other"))
+data2$diagnosis_2[data2$diag_2 %in% as.character(390:459) | data2$diag_2=='785'] <- "circulatory"
+data2$diagnosis_2[data2$diag_2 %in% as.character(460:519) | data2$diag_2=='786'] <- "respiratory"
+data2$diagnosis_2[data2$diag_2 %in% as.character(520:579) | data2$diag_2=='787'] <- "Digestive"
+data2$diagnosis_2[substr(data2$diag_2,1,3) %in% as.character(250)] <- "Diabetes"
+data2$diagnosis_2[data2$diag_2 %in% as.character(800:999)] <- "Injury"
+data2$diagnosis_2[data2$diag_2 %in% as.character(710:739)] <- "Musculoskeletal"
+data2$diagnosis_2[data2$diag_2 %in% as.character(580:629) | data2$diag_2=='788'] <- "Genitourinary"
+data2$diagnosis_2[data2$diag_2 %in% as.character(140:239) | data2$diag_2 %in% as.character(790:799) | data2$diag_1=='780' | data2$diag_2 %in% as.character(240:249) |
+                        data2$diag_2 %in% as.character(251:279) | data2$diag_2 %in% as.character(680:709) |
+                        data2$diag_2 %in% as.character(001:139) | data2$diag_2 =='781' |
+                      data2$diag_2 =='782' | data2$diag_2=='784'] <- "Neoplasms"
+#diagnosis3
+data2$diagnosis_3 <- factor( rep("other",nrow(data2)),ordered = F, 
+                                 levels = c("circulatory","respiratory","Digestive","Diabetes","Injury",
+                                            "Musculoskeletal","Genitourinary","Neoplasms","other"))
+data2$diagnosis_3[data2$diag_3 %in% as.character(390:459) | data2$diag_3=='785'] <- "circulatory"
+data2$diagnosis_3[data2$diag_3 %in% as.character(460:519) | data2$diag_3=='786'] <- "respiratory"
+data2$diagnosis_3[data2$diag_3 %in% as.character(520:579) | data2$diag_3=='787'] <- "Digestive"
+data2$diagnosis_3[substr(data2$diag_3,1,3) %in% as.character(250)] <- "Diabetes"
+data2$diagnosis_3[data2$diag_3 %in% as.character(800:999)] <- "Injury"
+data2$diagnosis_3[data2$diag_3 %in% as.character(710:739)] <- "Musculoskeletal"
+data2$diagnosis_3[data2$diag_3 %in% as.character(580:629) | data2$diag_3=='788'] <- "Genitourinary"
+data2$diagnosis_3[data2$diag_3 %in% as.character(140:239) | data2$diag_3 %in% as.character(790:799) | data2$diag_1=='780' | data2$diag_3 %in% as.character(240:249) |
+                        data2$diag_3 %in% as.character(251:279) | data2$diag_3 %in%as.character(680:709) |
+                        data2$diag_3 %in% as.character(001:139) | data2$diag_3=='781' |
+                      data2$diag_3=='782' | data2$diag_3=='784'] <- "Neoplasms"
+
+data2 <- select(data2, -diag_1, -diag_2, -diag_3)
+data2 <- rename(data2, diag1 = diagnosis_group, diag2=diagnosis_2, diag3 = diagnosis_3)
+```
+
+##transforming admission_type_id
+```{r}
+data2$admission_type <- factor(rep("other", nrow(data2)), ordered = F,
+                                  levels = c("Non-elective", "Elective","other"))
+data2$admission_type[data2$admission_type_id == 2 | data2$admission_type_id == 1 |data2$admission_type_id == 7] <- "Non-elective"
+data2$admission_type[data2$admission_type_id == 3 | data2$admission_type_id == 4] <- "Elective"
+
+data2 <- select(data2, -admission_type_id)
+```
+
+#removing all those who are dead/hospice/expired
+#note that this code can either be used or not
+#running this code will give you a GOF of 0.058, not running will give you a gof of 0.16
+```{r}
+#data2 <- data2[data2$discharge_disposition_id != '11',]
+#data2 <- data2[data2$discharge_disposition_id != '13',]
+#data2 <- data2[data2$discharge_disposition_id != '14',]
+#data2 <- data2[data2$discharge_disposition_id != '19',]
+#data2 <- data2[data2$discharge_disposition_id != '20',]
+#data2 <- data2[data2$discharge_disposition_id != '21',]
+```
+
+#creating new factors for the discharge_disposition
+```{r}
+data2$discharge_disposition <- factor(rep("Transferred", nrow(data2)), ordered = F,
+                                      levels = c("Home","Transferred", "Left_AMA"))
+data2$discharge_disposition[data2$discharge_disposition_id== 1 | data2$discharge_disposition_id== 6 |data2$discharge_disposition_id== 8] <- "Home"
+data2$discharge_disposition[data2$discharge_disposition_id== 7] <- "Left_AMA"
+
+data2 <- select(data2, -discharge_disposition_id)
+```
+
+#new factors for admission source
+```{r}
+data2$admission_source <- factor(rep("Others", nrow(data2)), ordered=  F,
+                                 levels = c("Referrals", "Transferred", "Others")
+                                 )
+data2$admission_source[data2$admission_source_id ==1 | data2$admission_source_id ==2 |data2$admission_source_id ==3 ] <- "Referrals"
+data2$admission_source[data2$admission_source_id ==4 | data2$admission_source_id ==5 |data2$admission_source_id ==6 |data2$admission_source_id ==10|data2$admission_source_id ==18|data2$admission_source_id ==22 |data2$admission_source_id ==25 |data2$admission_source_id ==26 ] <- "Transferred"
+
+data2 <- select(data2, -admission_source_id)
+#data2$number_of_med_change <- as.integer(data2$number_of_med_change)
+```
+
+#relevel of factors
+```{r}
+data2<- data2 %>% 
+  within(diag1 <- relevel(diag1, ref = "other")) %>% 
+  within(diag2 <- relevel(diag2, ref = "other")) %>% 
+  within(diag3 <- relevel(diag3, ref = "other"))
+```
+
+#changing the base level of max_glu_serum A1Cresult, insulin, change, and admission source
+```{r}
+data2 <- data2 %>% 
+  within(max_glu_serum <- relevel(max_glu_serum, ref = "None")) %>% 
+  within(A1Cresult <- relevel(A1Cresult, ref = "None")) %>% 
+  within(insulin <- relevel(insulin, ref = "No")) %>% 
+  within(change <- relevel(change, ref = "No")) %>% 
+  within(admission_source <- relevel(admission_source, ref = "Others"))
+```
+
+#goodness of fit
+```{r}
+gof1 <- glm(readmitted~race+payer_code+number_diagnoses+discharge_disposition+num_lab_procedures+
+                max_glu_serum+diag1+diag2+diag3+admission_source+age+num_procedures+A1Cresult+
+              service_utilization+
+                num_medications+change+count_of_diabetic_meds+admission_type + insulin
+            ,data = data2, family = binomial())
+
+pchisq(gof1$deviance, gof1$df.residual, lower.tail = FALSE)
+hoslem.test(gof1$y, fitted(gof1))
+```
+```{r}
+summary(gof1)
+```
+
+#model using all predictors
+```{r}
+inference <- glm(readmitted~.-patient_nbr, data = data2, family = binomial())
+summary(inference)
+```
+
+
+
+###preparation for prediction, training and test split of the training data
+```{r}
+training <- createDataPartition(y = data2$readmitted, p = .70, list = FALSE)
+trainingset <- data2[training,]
+validationset <- data2[-training,]
+oversampledTrain <- ovun.sample(readmitted ~ . ,data = trainingset, method = "over", N = 39465)$data
+undersampledTrain <- ovun.sample(readmitted ~ . ,data = trainingset, method = "under", N = 38465)$data
+bothsampledTrain <- ovun.sample(readmitted ~ . ,data = trainingset, method = "both", N = 38465)$data
+```
+
+#models with good fit
+```{r}
+model1 <- glm(readmitted~race+payer_code+number_diagnoses+discharge_disposition+num_lab_procedures+
+                max_glu_serum+diag1+diag2+diag3+admission_source+age+num_procedures+A1Cresult+
+              service_utilization+
+                num_medications+change+count_of_diabetic_meds+admission_type + insulin
+            ,data = oversampledTrain, family = binomial())
+```
+
+#trial prediction using model 2
+```{r}
+model2 <- glm(readmitted~ race + payer_code + number_diagnoses+discharge_disposition + num_lab_procedures + 
+               diag1+diag2+diag3+num_procedures + service_utilization + num_medications + insulin
+            ,data = bothsampledTrain, family = "binomial")
+
+preds2 <- predict(model2, validationset, type = "response")
+preds2 <- ifelse(preds2 > .6, 1, 0)
+results2 <- table(validationset$readmitted,preds2)
+```
+
+
+```{r}
+
+
+#model3 <- glm(readmitted ~race+gender+age+admission_type+discharge_disposition+admission_source+time_in_hospital+num_lab_procedures+num_procedures+num_medications+service_utilization+diag1+diag2+diag3+number_diagnoses+max_glu_serum+A1Cresult+insulin
+ #             ,data = bothsampledTrain, family = "binomial")
+
+#model4 <- glm(readmitted~race + age+time_in_hospital + payer_code + num_lab_procedures+num_procedures+num_medications+number_diagnoses+A1Cresult + insulin+change+diabetesMed+service_utilization+diag1+diag2+diag3+discharge_disposition+admission_source
+  #            , data = trainingset, family = "binomial")
+```
+
+#getting the auc
+```{r}
+real_val = as.numeric(data2$readmitted)
+preds = predict(model2, data2, type = "response")
+data.frame(real_val = real_val, preds = preds) %>% 
+ggplot(aes(d=real_val, m=preds)) +
+  geom_roc(n.cuts = 6, labelround = 4) +
+  geom_abline(intercept = 0, slope = 1)
+roc1 <- roc(real_val, preds)
+auc(roc1)
+```
+
+```{r}
+gof1a <- glm(readmitted~ race + payer_code + number_diagnoses+discharge_disposition + num_lab_procedures + 
+               diag1+diag2+diag3+num_procedures +service_utilization + num_medications + insulin
+             ,data = data2, family = "binomial")
+pchisq(gof1a$deviance, gof1a$df.residual, lower.tail = FALSE)
+hoslem.test(gof1a$y, fitted(gof1a))
+summary(gof1a)
+```
+
+
+#This portion is used to fill up the readmission probabilities of the test data set
+#In order to run properly, change the file name of the test data set to "data" and then run all the codes
+#that is related to cleansing only. This is in order to follow the cleansing steps done for the training data.
+#Improper cleansing of the test data may result to failure in the model as there might be levels/variables that are not included in the training data that might show up in the test set.
+
+#predicting using hybridsampled data model
+```{r}
+pred_prob <- predict(model2, data2, type = "response")
+#preds <- as.factor(ifelse(preds > 5 , 1,0))
+
+#confusionMatrix(preds, validationset$readmitted, positive = "1")
+```
+#in order to predict the test_data set, just rename the test data to "data" then run all the cleansing done on the #training data. 
+```{r}
+output <- cbind(data2, pred_prob)
+output <- select(output, patient_nbr, pred_prob)
+write.csv(output, 'C:\\Users\\jjuachon\\Desktop\\juachon_jean.csv')
+```
+
+
+
+
+
+
+
+
+
+
+
+
+

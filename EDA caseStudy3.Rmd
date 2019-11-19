@@ -1,0 +1,167 @@
+---
+title: "EDAcaseStudy3"
+author: "JeanPhilipJuachon"
+date: "10/30/2019"
+output: html_document
+---
+
+```{r}
+###model with rrl
+model2 <- glm(readmitted~ race+payer_code+number_diagnoses+diabetesMed+diag1+discharge_disposition+num_lab_procedures+
+                max_glu_serum+diag1+diag2+diag3+admission_source+age+num_procedures+A1Cresult+service_utilization+
+                num_medications+change+number_of_med_change+admission_type + insulin
+              ,data = data2, family = binomial(link = "logit"))
+
+predictions2 <- predict(model2, testingset, type = "response")
+predictions2 <- ifelse(predictions2 > .5, 1, 0)
+#predictions_logistic
+results2 <- as.data.frame(table(predictions2,testingset$readmitted))
+
+results2
+CorrectlyPredicted2 <- results2[1,3]+results2[4,3]
+CorrectlyPredicted2
+
+accuracy2 <-CorrectlyPredicted2/nrow(testingset)
+accuracy2
+
+sensitivity_result2<-results2[4,3]/(results2[2,3]+results2[4,3])
+sensitivity_result2
+
+specificity_result2<-results2[1,3]/(results2[3,3]+results2[1,3])
+specificity_result2
+
+cat("Accuracy: ", accuracy2,"\n",
+    "Sensitivity: ",sensitivity_result2,"\n",
+    "Specificity: ",specificity_result2)
+
+pchisq(model2$deviance, model2$df.residual, lower.tail = FALSE)
+hoslem.test(model2$y, fitted(model2))
+```
+
+
+
+```{r}
+testingset2 <- testingset %>% mutate(predictedvals = predictions2)
+
+ggplot(testingset2, aes(d = readmitted, m = predictions2)) +
+  geom_roc(n.cuts = 4, labelround = 4) +
+  geom_abline(intercept = 0, slope = 1)
+```
+
+#jrfarrer model
+```{r}
+model3 <- glm(readmitted~number_diagnoses + discharge_disposition + 
+                time_in_hospital +diabetesMed + diag1+ num_medications + service_utilization + insulin
+              , data = oversampled, family = binomial())
+
+predictions_model3 <- predict(model3, testingset, type = "response")
+predictions_model3 <- ifelse(predictions_model3 > .5, 1, 0)
+results3 <- as.data.frame(table(predictions_model3,testingset$readmitted))
+results3
+CorrectlyPredicted3 <- results3[1,3]+results3[4,3]
+CorrectlyPredicted3
+
+accuracy3 <-CorrectlyPredicted3/nrow(testingset)
+accuracy3
+
+sensitivity_result3<-results3[4,3]/(results3[2,3]+results3[4,3])
+sensitivity_result3
+
+specificity_result3<-results3[1,3]/(results3[3,3]+results3[1,3])
+specificity_result3
+
+cat("Accuracy: ", accuracy3,"\n",
+    "Sensitivity: ", sensitivity_result3,"\n",
+    "Specificity: ",specificity_result3)
+confmatrix3 <- table(testingset$readmitted, predictions_model3)
+confmatrix3
+
+pchisq(model3$deviance, model3$df.residual, lower.tail = FALSE)
+
+hoslem.test(model3$y, fitted(model3))
+```
+
+```{r}
+model4 <- glm(readmitted~ number_diagnoses + discharge_disposition + time_in_hospital + 
+                diabetesMed + num_medications + service_utilization + insulin+diag1+diag2+diag3+(diag1*diag2)+(diag1*diag3)+(diag2*diag3), data = trainingset, family = binomial())
+
+predictions_model4 <- predict(model4, testingset, type = "response")
+predictions_model4 <- ifelse(predictions_model4 > .5, 1, 0)
+results4 <- as.data.frame(table(predictions_model4,testingset$readmitted))
+results4
+CorrectlyPredicted4 <- results4[1,3]+results4[4,3]
+CorrectlyPredicted4
+
+accuracy4 <-CorrectlyPredicted4/nrow(testingset)
+accuracy4
+
+sensitivity_result4<-results4[4,3]/(results4[2,3]+results4[4,3])
+sensitivity_result4
+
+specificity_result4<-results4[1,3]/(results4[3,3]+results4[1,3])
+specificity_result4
+
+cat("Accuracy: ", accuracy4,"\n",
+    "Sensitivity: ", sensitivity_result4,"\n",
+    "Specificity: ",specificity_result4)
+
+confmatrix4<- table(testingset$readmitted, predictions_model4)
+confmatrix4
+```
+```{r}
+model5<- glm(readmitted~. -A1Cresult, data = trainingset, family = binomial())
+
+predictions_model5 <- predict(model5, testingset, type = "response")
+predictions_model5 <- ifelse(predictions_model5 > .5, 1, 0)
+results5 <- as.data.frame(table(predictions_model5,testingset$readmitted))
+
+CorrectlyPredicted5 <- results5[1,3]+results5[4,3]
+CorrectlyPredicted5
+
+accuracy5 <-CorrectlyPredicted5/nrow(testingset)
+accuracy5
+
+sensitivity_result5<-results5[4,3]/(results5[2,3]+results5[4,3])
+sensitivity_result5
+
+specificity_result5<-results5[1,3]/(results5[3,3]+results5[1,3])
+specificity_result5
+
+cat("Accuracy: ", accuracy5,"\n",
+    "Sensitivity: ", sensitivity_result5,"\n",
+    "Specificity: ",specificity_result5)
+confmatrix <- table(testingset$readmitted, predictions_model5)
+confmatrix
+```
+
+##grouping all medication change to get the count
+```{r}
+data$metformin <- ifelse(data$metformin == "Steady" | data$metformin == "No",0,1)
+data$repaglinide <- ifelse(data$repaglinide == "Steady" | data$repaglinide == "No",0,1)
+data$nateglinide <- ifelse(data$nateglinide == "Steady" | data$nateglinide == "No",0,1)
+data$chlorpropamide <- ifelse(data$chlorpropamide == "Steady" | data$chlorpropamide == "No",0,1)
+data$glimepiride <- ifelse(data$glimepiride == "Steady" | data$glimepiride == "No",0,1)
+data$acetohexamide <- ifelse(data$acetohexamide == "Steady" | data$acetohexamide == "No",0,1)
+data$glipizide <- ifelse(data$glipizide == "Steady" | data$glipizide == "No",0,1)
+data$glyburide <- ifelse(data$glyburide == "Steady" | data$glyburide == "No",0,1)
+data$tolbutamide <- ifelse(data$tolbutamide == "Steady" | data$tolbutamide == "No",0,1)
+data$pioglitazone <- ifelse(data$pioglitazone == "Steady" | data$pioglitazone == "No",0,1)
+data$rosiglitazone <- ifelse(data$rosiglitazone == "Steady" | data$rosiglitazone == "No",0,1)
+data$acarbose <- ifelse(data$acarbose == "Steady" | data$acarbose == "No",0,1)
+data$miglitol <- ifelse(data$miglitol == "Steady" | data$miglitol == "No",0,1)
+data$troglitazone <- ifelse(data$troglitazone == "Steady" | data$troglitazone == "No",0,1)
+data$tolazamide <- ifelse(data$tolazamide == "Steady" | data$tolazamide == "No",0,1)
+#data$insulin <- ifelse(data$insulin == "Steady" | data$insulin == "No",0,1)
+data$glyburide.metformin <- ifelse(data$glyburide.metformin == "Steady" | data$glyburide.metformin == "No",0,1)
+data$metformin.rosiglitazone <- ifelse(data$metformin.rosiglitazone == "Steady" | data$metformin.rosiglitazone == "No",0,1)
+data$metformin.pioglitazone <- ifelse(data$metformin.pioglitazone == "Steady" | data$metformin.pioglitazone == "No",0,1)
+data$glipizide.metformin <- ifelse(data$glipizide.metformin == "Steady" | data$glipizide.metformin == "No",0,1)
+
+data$count_of_diabetic_meds <- data$metformin + data$repaglinide +data$nateglinide +data$chlorpropamide+
+      data$glimepiride+data$glipizide+data$glyburide +data$pioglitazone +
+  data$rosiglitazone+data$acarbose + data$miglitol + data$troglitazone + data$glyburide.metformin + data$metformin.rosiglitazone + data$metformin.pioglitazone
+
+data<-select(data, -c(18:28))
+data <- select(data, -c(troglitazone,glyburide.metformin,metformin.pioglitazone,metformin.rosiglitazone))
+```
+
